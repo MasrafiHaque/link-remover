@@ -18,18 +18,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── Keep-Alive Web Server (UptimeRobot এর জন্য) ──────────
-app = Flask(__name__)
+# ── Keep-Alive Web Server ─────────────────────────────────
+flask_app = Flask(__name__)
 
-@app.route("/")
+@flask_app.route("/")
 def home():
     return "Bot is alive!", 200
 
-def run_flask():
-    app.run(host="0.0.0.0", port=8080)
-
 def keep_alive():
-    thread = threading.Thread(target=run_flask, daemon=True)
+    thread = threading.Thread(target=lambda: flask_app.run(host="0.0.0.0", port=8080), daemon=True)
     thread.start()
 
 # ── URL Detection ─────────────────────────────────────────
@@ -45,19 +42,20 @@ URL_PATTERN = re.compile(
 
 LINK_ENTITY_TYPES = {"url", "text_link"}
 
+# Admin ও Owner যে status-গুলো হলে exempt হবে
+EXEMPT_STATUSES = {"administrator", "creator"}
+
 
 def message_has_link(update: Update) -> bool:
     message = update.effective_message
     if not message:
         return False
 
-    # Telegram entity check
     entities = list(message.entities or []) + list(message.caption_entities or [])
     for entity in entities:
         if entity.type in LINK_ENTITY_TYPES:
             return True
 
-    # Regex check
     text = message.text or message.caption or ""
     if URL_PATTERN.search(text):
         return True
@@ -65,7 +63,21 @@ def message_has_link(update: Update) -> bool:
     return False
 
 
-# ── Bot Handler ───────────────────────────────────────────
+async def is_admin_or_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    user = update.effective_user
+    chat = update.effective_chat
+
+    if not user or not chat:
+        return False
+
+    try:
+        member = await context.bot.get_chat_member(chat.id, user.id)
+        return member.status in EXEMPT_STATUSES
+    except Exception as e:
+        logger.warning(f"Could not check admin status: {e}")
+        return False
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.effective_message
     if not message:
@@ -75,24 +87,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_type not in ("group", "supergroup"):
         return
 
-    if message_has_link(update):
-        try:
-            await message.delete()
-            logger.info(
-                f"Deleted | Chat: {update.effective_chat.id} "
-                f"| User: {getattr(update.effective_user, 'id', 'unknown')}"
-            )
-        except Exception as e:
-            logger.warning(f"Could not delete: {e}")
+    if not message_has_link(update):
+        return
+
+    # Admin বা Owner হলে কিছুই করবে না
+    if await is_admin_or_owner(update, context):
+        logger.info(f"Skipped (admin/owner) | User: {update.effective_user.id}")
+        return
+
+    try:
+        await message.delete()
+        logger.info(f"Deleted | Chat: {update.effective_chat.id} | User: {update.effective_user.id}")
+    except Exception as e:
+        logger.warning(f"Could not delete: {e}")
 
 
-# ── Main ──────────────────────────────────────────────────
 def main():
     token = os.environ.get("BOT_TOKEN")
     if not token:
         raise ValueError("BOT_TOKEN environment variable is not set!")
 
-    keep_alive()  # Flask server চালু করো (UptimeRobot ping-এর জন্য)
+    keep_alive()
 
     telegram_app = ApplicationBuilder().token(token).build()
     telegram_app.add_handler(
