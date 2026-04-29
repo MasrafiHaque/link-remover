@@ -1,9 +1,0 @@
-services:
-  - type: worker          # Background worker — ঘুমায় না, সবসময় চলে
-    name: telegram-link-deleter
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
-    envVars:
-      - key: BOT_TOKEN
-        sync: false       # Render dashboard থেকে manually set করতে হবে
